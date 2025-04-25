@@ -1,0 +1,1 @@
+python evaluate_steering.py --model "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B" --n_examples 50 --max_tokens 1000 --load_in_8bit True
