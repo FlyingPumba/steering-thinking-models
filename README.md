@@ -37,7 +37,7 @@
 
 2. Use Python Interaective Window on VS Code
 
-   1. Install Jupyter Extension
+   1. Install the Python and the Jupyter Extensions
    2. Create Python Interactive Window
 
       Press `Shift+Command+P` and search for `Jupyter: Create Interactive Window`
