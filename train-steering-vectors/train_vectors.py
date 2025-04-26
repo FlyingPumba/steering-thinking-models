@@ -1,7 +1,7 @@
 # %%
 import argparse
 import dotenv
-dotenv.load_dotenv("../.env")
+dotenv.load_dotenv(".env")
 
 from transformers import AutoTokenizer
 import torch
@@ -14,7 +14,9 @@ import os
 from messages import labels
 import random
 import json
+from importlib import reload
 import utils
+reload(utils)
 import math
 import gc
 # Parse arguments
@@ -302,9 +304,9 @@ model_name = args.model
 
 # Load model using utils function
 print(f"Loading model {model_name}...")
-model, tokenizer, _ = utils.load_model_and_vectors(compute_features=False, 
-                                                   model_name=model_name, 
-                                                   load_in_8bit=args.load_in_8bit)
+model, tokenizer = utils.load_model_and_vectors(compute_features=False, 
+                                                model_name=model_name, 
+                                                load_in_8bit=args.load_in_8bit)
 
 mean_vectors = defaultdict(lambda: {
     'mean': torch.zeros(model.config.num_hidden_layers, model.config.hidden_size),
@@ -313,14 +315,15 @@ mean_vectors = defaultdict(lambda: {
 
 # %%
 # Create directories
-os.makedirs('results/vars', exist_ok=True)
+VARS_FOLDER_PATH = "train-steering-vectors/results/vars"
+os.makedirs(f'{VARS_FOLDER_PATH}', exist_ok=True)
 
 save_every = args.save_every
-save_path = f"results/vars/mean_vectors_{model_name.split('/')[-1].lower()}.pt"
+save_path = f"{VARS_FOLDER_PATH}/mean_vectors_{model_name.split('/')[-1].lower()}.pt"
 
 load_from_json = args.load_from_json
 update_annotation = args.update_annotation
-responses_json_path = f"results/vars/responses_{model_name.split('/')[-1].lower()}.json"
+responses_json_path = f"{VARS_FOLDER_PATH}/responses_{model_name.split('/')[-1].lower()}.json"
 
 responses_data = []
 random.seed(args.seed)
@@ -443,3 +446,4 @@ print("Saved final responses data")
 save_dict = {k: {'mean': v['mean'], 'count': v['count']} for k, v in mean_vectors.items()}
 torch.save(save_dict, save_path)
 print("Saved final mean vectors")
+# %%

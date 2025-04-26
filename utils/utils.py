@@ -1,5 +1,5 @@
 import dotenv
-dotenv.load_dotenv("../.env")
+dotenv.load_dotenv(".env")
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -47,9 +47,7 @@ def chat(prompt, model="gpt-4.1", max_tokens=28000):
     for _ in range(3):
         try:
             if model_provider == "openai":
-                client = OpenAI(
-                    organization="org-E6iEJQGSfb0SNHMw6NFT1Cmi",
-                )
+                client = OpenAI()
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -680,7 +678,11 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     model_id = model_name.split('/')[-1].lower()
     
     # go into directory of this file
-    mean_vectors_dict = torch.load(f"../train-steering-vectors/results/vars/mean_vectors_{model_id}.pt")
+    mean_vectors_dict = None
+    try:
+        mean_vectors_dict = torch.load(f"../train-steering-vectors/results/vars/mean_vectors_{model_id}.pt")
+    except FileNotFoundError:
+        print(f"Expected error due to 1st time running, so the mean_vectors file of {model_id} does not exist yet. Proceeding without mean vectors.")
 
     if compute_features:
         # Compute feature vectors by subtracting overall mean
@@ -696,12 +698,15 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
                 for label in feature_vectors:
                     feature_vectors[label] = feature_vectors[label] * (feature_vectors["overall"].norm(dim=-1, keepdim=True) / feature_vectors[label].norm(dim=-1, keepdim=True))
 
+    # TODO: refactor
     if base_model_name is not None and compute_features:
         return model, tokenizer, base_model, base_tokenizer, feature_vectors
     elif base_model_name is not None and not compute_features:
         return model, tokenizer, base_model, base_tokenizer, mean_vectors_dict
     elif base_model_name is None and compute_features:
         return model, tokenizer, feature_vectors
+    elif mean_vectors_dict is None:
+        return model, tokenizer
     else:
         return model, tokenizer, mean_vectors_dict
 
