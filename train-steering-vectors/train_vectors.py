@@ -302,7 +302,9 @@ model_name = args.model
 
 # Load model using utils function
 print(f"Loading model {model_name}...")
-model, tokenizer, _ = utils.load_model_and_vectors(compute_features=False, model_name=model_name, load_in_8bit=args.load_in_8bit)
+model, tokenizer, _ = utils.load_model_and_vectors(compute_features=False, 
+                                                   model_name=model_name, 
+                                                   load_in_8bit=args.load_in_8bit)
 
 mean_vectors = defaultdict(lambda: {
     'mean': torch.zeros(model.config.num_hidden_layers, model.config.hidden_size),

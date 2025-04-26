@@ -644,7 +644,10 @@ def process_saved_responses(model_name, n_examples, model, tokenizer, layer):
 
     return all_activations, all_texts, overall_running_mean
 
-def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features=True, normalize_features=True, model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", base_model_name=None):
+def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features=True, 
+                           normalize_features=True, 
+                           model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 
+                           base_model_name=None):
     """
     Load model, tokenizer and mean vectors. Optionally compute feature vectors.
     

@@ -1,0 +1,9 @@
+# PyTorch with CUDA support
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.7.0
+nnsight
+openai
+anthropic
+
+python-dotenv==1.0.1
+tqdm==4.67.0
