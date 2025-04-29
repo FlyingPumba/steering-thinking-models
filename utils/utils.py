@@ -16,6 +16,8 @@ from openai import OpenAI
 import json
 import re
 import numpy as np
+import warnings
+from jaxtyping import Float
 
 class LinearProbe(nn.Module):
     def __init__(self, hidden_size, num_labels):
@@ -665,6 +667,7 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     
     tokenizer = model.tokenizer
 
+    base_model: LanguageModel = None
     if base_model_name is not None:
         base_model = LanguageModel(base_model_name, dispatch=True, load_in_8bit=load_in_8bit, device_map=device, torch_dtype=torch.bfloat16)
     
@@ -678,15 +681,22 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     model_id = model_name.split('/')[-1].lower()
     
     # go into directory of this file
-    mean_vectors_dict = None
+    mean_vectors_dict: dict[str, dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"] | int]] = None
     try:
-        mean_vectors_dict = torch.load(f"../train-steering-vectors/results/vars/mean_vectors_{model_id}.pt")
-    except FileNotFoundError:
-        print(f"Expected error due to 1st time running, so the mean_vectors file of {model_id} does not exist yet. Proceeding without mean vectors.")
+        mean_vectors_dict = torch.load(f"train-steering-vectors/results/vars/mean_vectors_{model_id}.pt")
+    except FileNotFoundError as e:
+        if compute_features:
+            del model
+            if base_model:
+                del base_model
+            torch.cuda.empty_cache()
+            gc.collect()
+            raise e
+        warnings.warn(f"Expected error due to 1st time running, so the mean_vectors file of {model_id} does not exist yet. Proceeding without mean vectors.")
 
     if compute_features:
         # Compute feature vectors by subtracting overall mean
-        feature_vectors = {}
+        feature_vectors: dict[str, ] = {}
         feature_vectors["overall"] = mean_vectors_dict["overall"]['mean']
         
         for label in mean_vectors_dict:

@@ -217,7 +217,7 @@ def get_char_to_token_map(text: str, tokenizer: PreTrainedTokenizer):
             
     return char_to_token
 
-def update_mean_vectors(mean_vectors: defaultdict[Any, dict[str, torch.Tensor | int]], 
+def update_mean_vectors(mean_vectors: dict[str, dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"] | int]], 
                         layer_outputs: Float[torch.Tensor, "num_hidden_layers token_len hidden_size"],
                         label_positions: dict[str, list[tuple[int, int]]],
                         index: int):
@@ -293,7 +293,7 @@ def process_batch_annotations(thinking_processes: list[str]):
 def process_message_batch(messages_batch: list[dict[str, str]], 
                           tokenizer: PreTrainedTokenizer, 
                           model: LanguageModel, 
-                          mean_vectors: defaultdict[Any, dict[str, torch.Tensor | int]], 
+                          mean_vectors: dict[str, dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"] | int]], 
                           batch_indices: list[int], 
                           get_annotation=True):
     """Process a batch of messages and update mean vectors"""

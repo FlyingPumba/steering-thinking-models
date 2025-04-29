@@ -1,12 +1,12 @@
 # %%
 import argparse
 import dotenv
-dotenv.load_dotenv("../.env")
+dotenv.load_dotenv(".env")
 
 import torch
 import json
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from nnsight import NNsight
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
+from nnsight import NNsight, LanguageModel
 import re
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -15,9 +15,11 @@ import torch.nn.functional as F
 import os
 import utils
 import gc
+from jaxtyping import Float
+
 # Add argparse for model selection
 parser = argparse.ArgumentParser(description="Analyze layer effects for different reasoning behaviors")
-parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
                     help="Model to analyze")
 parser.add_argument("--n_examples", type=int, default=10,
                     help="Number of examples to analyze per label")
@@ -29,9 +31,12 @@ args, _ = parser.parse_known_args()
 # python analyze_layer_effects --model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --n_examples 500 --load_in_8bit True
 
 # %%
-def find_label_positions(annotated_response, original_text, tokenizer, label):
+def find_label_positions(annotated_response: str, 
+                         original_text: str, 
+                         tokenizer: PreTrainedTokenizer, 
+                         label: str):
     """Parse annotations and find token positions for each label"""
-    label_positions = []
+    label_positions: list[tuple[int, int]] = []
     pattern = f'\\["{label}"\\]([^\\[]+?)(?=\\[|$)'
     matches = re.finditer(pattern, annotated_response)
     thinking_tokens = tokenizer.encode(original_text)[1:]        
@@ -64,8 +69,13 @@ def compute_kl_divergence_metric(logits):
     detached_probs = F.log_softmax(logits.detach(), dim=-1)
     return F.kl_div(probs, detached_probs, reduction='batchmean')
 
-def analyze_layer_effects(model, tokenizer, text, label, feature_vectors, label_positions):
-    input_ids = tokenizer(text, return_tensors="pt").input_ids.to("cuda")
+def analyze_layer_effects(model: LanguageModel, 
+                          tokenizer: PreTrainedTokenizer, 
+                          text: str, 
+                          label: str, 
+                          feature_vectors, 
+                          label_positions: list[tuple[int, int]]):
+    input_ids: Float[torch.Tensor, "batch seq_len"] = tokenizer(text, return_tensors="pt").input_ids.to("cuda")
     
     patching_effects = [0 for _ in range(model.config.num_hidden_layers)]
 
@@ -73,8 +83,8 @@ def analyze_layer_effects(model, tokenizer, text, label, feature_vectors, label_
         return None
 
     for pos in label_positions:
-        layer_activations = []
-        layer_gradients = []
+        layer_activations: list[Float[torch.Tensor, "batch seq_len hidden_size"]] = []
+        layer_gradients: list[Float[torch.Tensor, "batch seq_len hidden_size"]] = []
         
         start, end = pos
 
@@ -233,16 +243,18 @@ def plot_layer_effects(layer_effects, model_name):
 # Load model and data
 model_name = args.model
 print(f"Loading model {model_name}...")
+feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]] = {}
 model, tokenizer, feature_vectors = utils.load_model_and_vectors(load_in_8bit=args.load_in_8bit, compute_features=True, model_name=model_name)
 
 # Create directories
-os.makedirs('results/vars', exist_ok=True)
-os.makedirs('results/figures', exist_ok=True)
+RESULTS_FOLDER_PATH = "train-steering-vectors/results"
+os.makedirs(f'{RESULTS_FOLDER_PATH}/vars', exist_ok=True)
+os.makedirs(f'{RESULTS_FOLDER_PATH}/figures', exist_ok=True)
 
 # %%
 # Get model identifier for file naming
 model_id = model_name.split('/')[-1].lower()
-responses_path = f'../train-steering-vectors/results/vars/responses_{model_id}.json'
+responses_path = f'{RESULTS_FOLDER_PATH}/vars/responses_{model_id}.json'
 
 with open(responses_path, 'r') as f:
     results = json.load(f)
@@ -254,33 +266,36 @@ labels = [
     'example-testing',
     'adding-knowledge',
 ]
-n_examples = args.n_examples  # Number of examples to analyze per label
+n_examples: int = args.n_examples  # Number of examples to analyze per label
 
 # Store results
-layer_effects = {label: [] for label in labels}
+layer_effects: dict[str, list[float]] = {label: [] for label in labels}
 
 # Analyze each label
 for label in labels:
     print(f"Analyzing label: {label}")
     for example in tqdm(results[:n_examples]):
-        original_text = example['full_response']
-        annotated_text = example['annotated_thinking']
+        original_text: str = example['full_response']
+        annotated_text: str = example['annotated_thinking']
 
         
         # Find token positions of labeled sentences
-        label_positions = []
+        label_positions: list[tuple[int, int]] = []
         for label_j in labels:
             if label_j != label:
-                label_positions.extend(find_label_positions(annotated_text, original_text, tokenizer, label_j))
+                label_positions.extend(find_label_positions(annotated_response=annotated_text, 
+                                                            original_text=original_text,
+                                                            tokenizer=tokenizer, 
+                                                            label=label_j))
 
         if label_positions:  # Only process if we found labeled sentences
             effects = analyze_layer_effects(
-                model,
-                tokenizer,
-                original_text,
-                label,
-                feature_vectors,
-                label_positions
+                model=model,
+                tokenizer=tokenizer,
+                text=original_text,
+                label=label,
+                feature_vectors=feature_vectors,
+                label_positions=label_positions
             )
 
             if effects:
@@ -288,5 +303,20 @@ for label in labels:
 
 # %% Plot results
 plot_layer_effects(layer_effects, model_name)
+
+# %%
+
+# TODO: is this a bug?
+# perhaps instead of `continue` statement, we want `break` statement?
+# this function returns 
+# [(0,4), (4,8)] for label="backtracking"
+# [(0,4), (4,8)] for label="uncertainty-estimation"
+#
+# find_label_positions(
+#     annotated_response="[\"backtracking\"]hello hello hello.[\"end-section\"][\"uncertainty-estimation\"]hello hello hello.[\"end-section\"]",
+#     original_text="hello hello hello. hello hello hello.",
+#     tokenizer=tokenizer,
+#     label="uncertainty-estimation"
+# )
 
 # %%
