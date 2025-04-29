@@ -3,6 +3,7 @@ import torch
 import matplotlib.pyplot as plt
 import argparse
 from jaxtyping import Float
+import os
 
 # %%
 parser = argparse.ArgumentParser()
@@ -18,6 +19,9 @@ overall_mean = mean_vectors_dict['overall']['mean']
 for label in mean_vectors_dict:
     if label != 'overall':
         feature_vectors[label] = mean_vectors_dict[label]['mean'] - overall_mean
+
+FIGURES_FOLDER_PATH = "train-steering-vectors/results/figures"
+os.makedirs(f'{FIGURES_FOLDER_PATH}', exist_ok=True)
 
 def plot_cosine_similarity_heatmap(feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]], 
                                    model_id: str):
