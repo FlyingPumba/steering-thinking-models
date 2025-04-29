@@ -138,7 +138,7 @@ def process_model_output_batch(messages_batch: list[dict[str, str]],
     
     layer_outputs = [x.value.cpu().detach().to(torch.float32) for x in layer_outputs]
 
-    batch_layer_outputs: list[Float[torch.Tensor, "batch token_len hidden_size"]] = []
+    batch_layer_outputs: list[Float[torch.Tensor, "num_hidden_layers token_len hidden_size"]] = []
     
     for batch_idx in range(len(messages_batch)):
         # get length of padding tokens
@@ -218,7 +218,7 @@ def get_char_to_token_map(text: str, tokenizer: PreTrainedTokenizer):
     return char_to_token
 
 def update_mean_vectors(mean_vectors: defaultdict[Any, dict[str, torch.Tensor | int]], 
-                        layer_outputs: Float[torch.Tensor, "batch token_len hidden_size"],
+                        layer_outputs: Float[torch.Tensor, "num_hidden_layers token_len hidden_size"],
                         label_positions: dict[str, list[tuple[int, int]]],
                         index: int):
     """Update mean vectors for overall and individual labels"""

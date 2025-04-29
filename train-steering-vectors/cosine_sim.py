@@ -2,6 +2,7 @@
 import torch
 import matplotlib.pyplot as plt
 import argparse
+from jaxtyping import Float
 
 # %%
 parser = argparse.ArgumentParser()
@@ -9,25 +10,26 @@ parser.add_argument("--model", type=str, default="deepseek-ai/DeepSeek-R1-Distil
 parser.add_argument("--layer", type=int, default=15)
 args, _ = parser.parse_known_args()
 
-model_name = args.model
-mean_vectors_dict = torch.load(f"results/vars/mean_vectors_{model_name.split('/')[-1].lower()}.pt")
-feature_vectors = {}
+model_name: str = args.model
+mean_vectors_dict: dict[str, dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"] | int]] = torch.load(f"train-steering-vectors/results/vars/mean_vectors_{model_name.split('/')[-1].lower()}.pt")
+feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]] = {}
 
 overall_mean = mean_vectors_dict['overall']['mean']
 for label in mean_vectors_dict:
     if label != 'overall':
         feature_vectors[label] = mean_vectors_dict[label]['mean'] - overall_mean
 
-def plot_cosine_similarity_heatmap(feature_vectors, model_id):
+def plot_cosine_similarity_heatmap(feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]], 
+                                   model_id: str):
     labels = list(feature_vectors.keys())
     n_labels = len(labels)
     
     # Create similarity matrix
     similarity_matrix = torch.zeros((n_labels, n_labels))
 
+    layer_idx: int = args.layer
     for i, label_1 in enumerate(labels):
         for j, label_2 in enumerate(labels):
-            layer_idx = args.layer
             similarity_matrix[i, j] = torch.cosine_similarity(
                 feature_vectors[label_1][layer_idx], 
                 feature_vectors[label_2][layer_idx], 
@@ -55,11 +57,11 @@ def plot_cosine_similarity_heatmap(feature_vectors, model_id):
     
     plt.title('Cosine Similarity Between Feature Vectors')
     plt.tight_layout()
-    plt.savefig(f'results/figures/cosine_similarity_heatmap_{model_id}.png', dpi=300)
+    plt.savefig(f'train-steering-vectors/results/figures/cosine_similarity_heatmap_{model_id}.png', dpi=300)
     plt.show()
 
 
 # Plot the aggregated heatmap
-plot_cosine_similarity_heatmap(feature_vectors, model_id=model_name.split('/')[-1].lower())
+plot_cosine_similarity_heatmap(feature_vectors=feature_vectors, model_id=model_name.split('/')[-1].lower())
 
 # %%
