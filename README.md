@@ -48,6 +48,7 @@
    OPENAI_ORG_ID=get the org id from https://platform.openai.com/settings/organization/general
    OPENAI_API_KEY=get the api key from https://platform.openai.com/api-keys
    OPENROUTER_API_KEY=get the api key from https://openrouter.com/settings/keys
+   NDIF_API_KEY=get the api key from https://login.ndif.us/
    ```
 
 4. Set the limits in the [OpenAI Platform account](https://platform.openai.com/settings/organization/limits)
