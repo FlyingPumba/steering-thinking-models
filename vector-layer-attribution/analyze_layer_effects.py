@@ -117,6 +117,7 @@ def analyze_layer_effects(model: LanguageModel,
             for layer_idx in range(model.config.num_hidden_layers):
                 # Get activations and gradients for the entire labeled section
                 activations = layer_activations[layer_idx][0, start-1:min(start, end-2)]
+                # TODO: do we need activations?
                 gradients = layer_gradients[layer_idx][0, start-1:min(start, end-2)]
                 
                 effect = einops.einsum(feature_activation[layer_idx], gradients, 'd, s d -> s').mean().abs()
@@ -239,7 +240,7 @@ def plot_layer_effects(layer_effects: dict[str, list[list[float]]], model_name: 
     
     model_id_lower = model_name.split('/')[-1].lower()
     
-    plt.savefig(f'{RESULTS_FOLDER_PATH}/figures/layer_effects_{model_id_lower}_subplots.pdf', 
+    plt.savefig(f'{RESULTS_FOLDER_PATH}/figures/layer_effects_{model_id_lower}_subplots.png', 
                 dpi=300, 
                 bbox_inches='tight',
                 facecolor='white',
