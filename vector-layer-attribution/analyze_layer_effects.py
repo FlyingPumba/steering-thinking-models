@@ -3,19 +3,22 @@ import argparse
 import dotenv
 dotenv.load_dotenv(".env")
 
+import os
 import torch
+from torch import Tensor
 import json
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
-from nnsight import NNsight, LanguageModel
+from nnsight import NNsight, LanguageModel, CONFIG
+CONFIG.set_default_api_key(os.getenv("NDIF_API_KEY"))
 import re
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
 import torch.nn.functional as F
-import os
 import utils
 import gc
 from jaxtyping import Float
+from einops import einops
 
 # Add argparse for model selection
 parser = argparse.ArgumentParser(description="Analyze layer effects for different reasoning behaviors")
@@ -29,6 +32,11 @@ args, _ = parser.parse_known_args()
 
 # give eample run command
 # python analyze_layer_effects --model deepseek-ai/DeepSeek-R1-Distill-Qwen-32B --n_examples 500 --load_in_8bit True
+
+# Create directories
+RESULTS_FOLDER_PATH = "train-steering-vectors/results"
+os.makedirs(f'{RESULTS_FOLDER_PATH}/vars', exist_ok=True)
+os.makedirs(f'{RESULTS_FOLDER_PATH}/figures', exist_ok=True)
 
 # %%
 def find_label_positions(annotated_response: str, 
@@ -63,7 +71,7 @@ def find_label_positions(annotated_response: str,
     
     return label_positions
 
-def compute_kl_divergence_metric(logits):
+def compute_kl_divergence_metric(logits: Float[Tensor, "batch seq_len vocab_size"]):
     """Compute KL divergence between predicted distribution and detached version"""
     probs = F.log_softmax(logits, dim=-1)
     detached_probs = F.log_softmax(logits.detach(), dim=-1)
@@ -75,67 +83,67 @@ def analyze_layer_effects(model: LanguageModel,
                           label: str, 
                           feature_vectors, 
                           label_positions: list[tuple[int, int]]):
-    input_ids: Float[torch.Tensor, "batch seq_len"] = tokenizer(text, return_tensors="pt").input_ids.to("cuda")
-    
-    patching_effects = [0 for _ in range(model.config.num_hidden_layers)]
-
     if len(label_positions) == 0:
         return None
 
-    for pos in label_positions:
-        layer_activations: list[Float[torch.Tensor, "batch seq_len hidden_size"]] = []
-        layer_gradients: list[Float[torch.Tensor, "batch seq_len hidden_size"]] = []
-        
-        start, end = pos
+    patching_effects = [0 for _ in range(model.config.num_hidden_layers)]
 
-        with model.trace() as tracer:
-            with tracer.invoke(input_ids[:, :end]) as invoker:
+    input_ids: Float[Tensor, "batch seq_len"] = tokenizer(text, return_tensors="pt").input_ids
+
+    with model.session(remote=True) as session:
+        for pos in label_positions:            
+            start, end = pos
+            with model.trace(input_ids[:, :end]) as tracer:
+                layer_activations: list[Float[Tensor, "batch seq_len hidden_size"]] = []
+                layer_gradients: list[Float[Tensor, "batch seq_len hidden_size"]] = []
+
                 # Collect activations from each layer
                 for layer_idx in range(model.config.num_hidden_layers):
-                    layer_activations.append(model.model.layers[layer_idx].output[0].detach().cpu().save())
-                    layer_gradients.append(model.model.layers[layer_idx].output[0].grad.detach().cpu().save())
+                    layer_activations.append(model.model.layers[layer_idx].output[0].detach())
+                    model.model.layers[layer_idx].output[0].requires_grad_(True)
+                    layer_gradients.append(model.model.layers[layer_idx].output[0].grad.detach())
                 
                 # Get logits for the endpoints
-                logits = model.lm_head.output.save()
+                logits = model.lm_head.output
                 
                 # Compute cross entropy metric for each labeled section
                 value = compute_kl_divergence_metric(logits[0, start])
 
                 # Backward pass
                 value.backward()
-    
-        layer_activations = [layer_activations[i].value for i in range(model.config.num_hidden_layers)]
-        layer_gradients = [layer_gradients[i].value for i in range(model.config.num_hidden_layers)]
 
-        feature_activation = feature_vectors[label].to(torch.bfloat16).to("cuda")
+            feature_activation = feature_vectors[label].to(torch.bfloat16)
 
-        for layer_idx in range(model.config.num_hidden_layers):
-            # Get activations and gradients for the entire labeled section
-            activations = layer_activations[layer_idx][0, start-1:min(start, end-2)].to("cuda")
-            gradients = layer_gradients[layer_idx][0, start-1:min(start, end-2)].to("cuda")
+            for layer_idx in range(model.config.num_hidden_layers):
+                # Get activations and gradients for the entire labeled section
+                activations = layer_activations[layer_idx][0, start-1:min(start, end-2)]
+                gradients = layer_gradients[layer_idx][0, start-1:min(start, end-2)]
+                
+                effect = einops.einsum(feature_activation[layer_idx], gradients, 'd, s d -> s').mean().abs()
+                
+                patching_effects[layer_idx] += effect
+                
+                # Clean up layer-specific tensors
+                del activations
+                del gradients
             
-            effect = torch.einsum('d,sd->s', feature_activation[layer_idx], gradients).mean().abs()
-            
-            patching_effects[layer_idx] += effect.cpu().item()
-            
-            # Clean up layer-specific tensors
-            del activations
-            del gradients
-          
-        # Clean up batch-specific tensors
-        del layer_activations
-        del layer_gradients
-        del feature_activation
-        torch.cuda.empty_cache()
-        gc.collect()
+            # Clean up batch-specific tensors
+            del layer_activations
+            del layer_gradients
+            del feature_activation
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            patching_effects = [effect.item().save() for effect in patching_effects]
 
     patching_effects = [effect / len(label_positions) for effect in patching_effects]
 
     return patching_effects
 
-def plot_layer_effects(layer_effects, model_name):
+def plot_layer_effects(layer_effects: dict[str, list[list[float]]], model_name: str):
     # Set up the figure with subplots
     n_labels = sum(1 for label, effects in layer_effects.items() if effects)
+    axes: list[plt.Axes] = []
     fig, axes = plt.subplots(1, n_labels, figsize=(6*n_labels, 8), facecolor='white')
     
     # Handle the case where there's only one subplot
@@ -231,7 +239,7 @@ def plot_layer_effects(layer_effects, model_name):
     
     model_id_lower = model_name.split('/')[-1].lower()
     
-    plt.savefig(f'results/figures/layer_effects_{model_id_lower}_subplots.pdf', 
+    plt.savefig(f'{RESULTS_FOLDER_PATH}/figures/layer_effects_{model_id_lower}_subplots.pdf', 
                 dpi=300, 
                 bbox_inches='tight',
                 facecolor='white',
@@ -241,15 +249,14 @@ def plot_layer_effects(layer_effects, model_name):
 
 # %%
 # Load model and data
-model_name = args.model
+model_name: str = args.model
 print(f"Loading model {model_name}...")
-feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]] = {}
-model, tokenizer, feature_vectors = utils.load_model_and_vectors(load_in_8bit=args.load_in_8bit, compute_features=True, model_name=model_name)
-
-# Create directories
-RESULTS_FOLDER_PATH = "train-steering-vectors/results"
-os.makedirs(f'{RESULTS_FOLDER_PATH}/vars', exist_ok=True)
-os.makedirs(f'{RESULTS_FOLDER_PATH}/figures', exist_ok=True)
+feature_vectors: dict[str, Float[Tensor, "num_hidden_layers hidden_size"]] = {}
+model, tokenizer, feature_vectors = utils.load_model_and_vectors(
+    load_in_8bit=args.load_in_8bit, 
+    compute_features=True, 
+    model_name=model_name,
+    dispatch=False)
 
 # %%
 # Get model identifier for file naming
@@ -269,7 +276,7 @@ labels = [
 n_examples: int = args.n_examples  # Number of examples to analyze per label
 
 # Store results
-layer_effects: dict[str, list[float]] = {label: [] for label in labels}
+layer_effects: dict[str, list[list[float]]] = {label: [] for label in labels}
 
 # Analyze each label
 for label in labels:
@@ -302,7 +309,7 @@ for label in labels:
                 layer_effects[label].append(effects)
 
 # %% Plot results
-plot_layer_effects(layer_effects, model_name)
+plot_layer_effects(layer_effects=layer_effects, model_name=model_name)
 
 # %%
 

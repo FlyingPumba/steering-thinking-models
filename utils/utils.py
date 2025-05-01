@@ -647,7 +647,7 @@ def process_saved_responses(model_name, n_examples, model, tokenizer, layer):
 def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features=True, 
                            normalize_features=True, 
                            model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 
-                           base_model_name=None):
+                           base_model_name=None, dispatch=True):
     """
     Load model, tokenizer and mean vectors. Optionally compute feature vectors.
     
@@ -659,7 +659,7 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
         model_name (str): Name/path of the model to load
         base_model_name (str): Name/path of the base model to load
     """
-    model = LanguageModel(model_name, dispatch=True, load_in_8bit=load_in_8bit, device_map=device, torch_dtype=torch.bfloat16)
+    model = LanguageModel(model_name, dispatch=dispatch, load_in_8bit=load_in_8bit, device_map=device, torch_dtype=torch.bfloat16)
     
     model.generation_config.temperature=None
     model.generation_config.top_p=None
