@@ -81,7 +81,7 @@ def analyze_layer_effects(model: LanguageModel,
                           tokenizer: PreTrainedTokenizer, 
                           text: str, 
                           label: str, 
-                          feature_vectors, 
+                          feature_vectors: dict[str, Float[Tensor, "num_hidden_layers hidden_size"]], 
                           label_positions: list[tuple[int, int]]):
     if len(label_positions) == 0:
         return None
@@ -90,18 +90,11 @@ def analyze_layer_effects(model: LanguageModel,
 
     input_ids: Float[Tensor, "batch seq_len"] = tokenizer(text, return_tensors="pt").input_ids
 
-    with model.session(remote=True) as session:
+    with model.session(remote=True):
         for pos in label_positions:            
             start, end = pos
-            with model.trace(input_ids[:, :end]) as tracer:
-                layer_activations: list[Float[Tensor, "batch seq_len hidden_size"]] = []
+            with model.trace(input_ids[:, :end]):
                 layer_gradients: list[Float[Tensor, "batch seq_len hidden_size"]] = []
-
-                # Collect activations from each layer
-                for layer_idx in range(model.config.num_hidden_layers):
-                    layer_activations.append(model.model.layers[layer_idx].output[0].detach())
-                    model.model.layers[layer_idx].output[0].requires_grad_(True)
-                    layer_gradients.append(model.model.layers[layer_idx].output[0].grad.detach())
                 
                 # Get logits for the endpoints
                 logits = model.lm_head.output
@@ -112,12 +105,16 @@ def analyze_layer_effects(model: LanguageModel,
                 # Backward pass
                 value.backward()
 
+                # Collect activations from each layer
+                for layer_idx in range(model.config.num_hidden_layers):
+                    model.model.layers[layer_idx].output[0].requires_grad_(True)
+                    # TODO: why `.detach()` is required here? removing it causes error
+                    layer_gradients.append(model.model.layers[layer_idx].output[0].grad.detach())
+
             feature_activation = feature_vectors[label].to(torch.bfloat16)
 
             for layer_idx in range(model.config.num_hidden_layers):
                 # Get activations and gradients for the entire labeled section
-                activations = layer_activations[layer_idx][0, start-1:min(start, end-2)]
-                # TODO: do we need activations?
                 gradients = layer_gradients[layer_idx][0, start-1:min(start, end-2)]
                 
                 effect = einops.einsum(feature_activation[layer_idx], gradients, 'd, s d -> s').mean().abs()
@@ -125,11 +122,9 @@ def analyze_layer_effects(model: LanguageModel,
                 patching_effects[layer_idx] += effect
                 
                 # Clean up layer-specific tensors
-                del activations
                 del gradients
             
             # Clean up batch-specific tensors
-            del layer_activations
             del layer_gradients
             del feature_activation
             torch.cuda.empty_cache()
