@@ -715,8 +715,6 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
         return model, tokenizer, base_model, base_tokenizer, mean_vectors_dict
     elif base_model_name is None and compute_features:
         return model, tokenizer, feature_vectors
-    elif mean_vectors_dict is None:
-        return model, tokenizer
     else:
         return model, tokenizer, mean_vectors_dict
 

@@ -1,6 +1,6 @@
 # %%
 import dotenv
-dotenv.load_dotenv("../.env")
+dotenv.load_dotenv(".env")
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
@@ -15,6 +15,7 @@ import gc
 import os
 import utils
 from utils import steering_config
+from typing import Any
 
 os.system('')  # Enable ANSI support on Windows
 
@@ -25,6 +26,7 @@ def load_model_and_vectors(model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
 
 # %%
 model_name = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"  # Can be changed to use different models
+feature_vectors: dict[str, Any] = None
 model, tokenizer, feature_vectors = load_model_and_vectors(model_name)
 
 # %% Get activations and response
@@ -34,11 +36,11 @@ data_idx = 1
 print("Original response:")
 input_ids = tokenizer.apply_chat_template([eval_messages[data_idx]], add_generation_prompt=True, return_tensors="pt").to("cuda")
 output_ids = utils.custom_generate_with_projection_removal(
-    model,
-    tokenizer,
-    input_ids,
+    model=model,
+    tokenizer=tokenizer,
+    input_ids=input_ids,
     max_new_tokens=250,
-    label="none", 
+    label=None,
     feature_vectors=None,
     steering_config=steering_config[model_name],
 )
@@ -56,7 +58,7 @@ for t in ["positive", "negative"]:
         tokenizer,
         input_ids,
         max_new_tokens=250,
-        label="hypothesis-generation",
+        label="backtracking",
         feature_vectors=feature_vectors,
         steering_config=steering_config[model_name],
         steer_positive=True if t == "positive" else False,
