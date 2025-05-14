@@ -1,6 +1,6 @@
 # %%
 import dotenv
-dotenv.load_dotenv("../.env")
+dotenv.load_dotenv(".env")
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
@@ -15,16 +15,19 @@ import gc
 import os
 import utils
 from utils import steering_config
+from typing import Any
+from jaxtyping import Float
 
 os.system('')  # Enable ANSI support on Windows
 
 # %% Evaluation examples - 3 from each category
 def load_model_and_vectors(model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B"):
-    model, tokenizer, feature_vectors = utils.load_model_and_vectors(compute_features=True, model_name=model_name)
+    model, tokenizer, feature_vectors = utils.load_model_and_vectors(compute_features=True, model_name=model_name, dispatch=False)
     return model, tokenizer, feature_vectors
 
 # %%
 model_name = "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"  # Can be changed to use different models
+feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]] = None
 model, tokenizer, feature_vectors = load_model_and_vectors(model_name)
 
 # %% Get activations and response
@@ -32,13 +35,13 @@ data_idx = 1
 
 # %%
 print("Original response:")
-input_ids = tokenizer.apply_chat_template([eval_messages[data_idx]], add_generation_prompt=True, return_tensors="pt").to("cuda")
+input_ids = tokenizer.apply_chat_template([eval_messages[data_idx]], add_generation_prompt=True, return_tensors="pt")
 output_ids = utils.custom_generate_with_projection_removal(
-    model,
-    tokenizer,
-    input_ids,
+    model=model,
+    tokenizer=tokenizer,
+    input_ids=input_ids,
     max_new_tokens=250,
-    label="none", 
+    label=None,
     feature_vectors=None,
     steering_config=steering_config[model_name],
 )
@@ -50,13 +53,13 @@ print("\n================\n")
 # %%
 for t in ["positive", "negative"]:
 
-    input_ids = tokenizer.apply_chat_template([eval_messages[data_idx]], add_generation_prompt=True, return_tensors="pt").to("cuda")
+    input_ids = tokenizer.apply_chat_template(eval_messages[data_idx], add_generation_prompt=True, return_tensors="pt")
     output_ids = utils.custom_generate_with_projection_removal(
         model,
         tokenizer,
         input_ids,
         max_new_tokens=250,
-        label="hypothesis-generation",
+        label="backtracking",
         feature_vectors=feature_vectors,
         steering_config=steering_config[model_name],
         steer_positive=True if t == "positive" else False,

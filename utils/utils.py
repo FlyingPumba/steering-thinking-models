@@ -1,8 +1,8 @@
 import dotenv
-dotenv.load_dotenv("../.env")
+dotenv.load_dotenv(".env")
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer
 from nnsight import LanguageModel
 from tqdm import tqdm
 import gc
@@ -16,6 +16,9 @@ from openai import OpenAI
 import json
 import re
 import numpy as np
+import warnings
+from jaxtyping import Float
+from typing import TypedDict
 
 class LinearProbe(nn.Module):
     def __init__(self, hidden_size, num_labels):
@@ -24,7 +27,15 @@ class LinearProbe(nn.Module):
         
     def forward(self, x):
         return self.linear(x)
+    
+class SteeringDict(TypedDict):
+    vector_layer: int
+    pos_layers: list[int]
+    neg_layers: list[int]
+    pos_coefficient: float
+    neg_coefficient: float
 
+SteeringConfig = dict[str, dict[str, SteeringDict]]
 
 def chat(prompt, model="gpt-4.1", max_tokens=28000):
 
@@ -47,9 +58,7 @@ def chat(prompt, model="gpt-4.1", max_tokens=28000):
     for _ in range(3):
         try:
             if model_provider == "openai":
-                client = OpenAI(
-                    organization="org-E6iEJQGSfb0SNHMw6NFT1Cmi",
-                )
+                client = OpenAI()
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -644,7 +653,10 @@ def process_saved_responses(model_name, n_examples, model, tokenizer, layer):
 
     return all_activations, all_texts, overall_running_mean
 
-def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features=True, normalize_features=True, model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", base_model_name=None):
+def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features=True, 
+                           normalize_features=True, 
+                           model_name="deepseek-ai/DeepSeek-R1-Distill-Llama-8B", 
+                           base_model_name=None, dispatch=True):
     """
     Load model, tokenizer and mean vectors. Optionally compute feature vectors.
     
@@ -656,7 +668,7 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
         model_name (str): Name/path of the model to load
         base_model_name (str): Name/path of the base model to load
     """
-    model = LanguageModel(model_name, dispatch=True, load_in_8bit=load_in_8bit, device_map=device, torch_dtype=torch.bfloat16)
+    model = LanguageModel(model_name, dispatch=dispatch, load_in_8bit=load_in_8bit, device_map=device, torch_dtype=torch.bfloat16)
     
     model.generation_config.temperature=None
     model.generation_config.top_p=None
@@ -664,6 +676,7 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     
     tokenizer = model.tokenizer
 
+    base_model: LanguageModel = None
     if base_model_name is not None:
         base_model = LanguageModel(base_model_name, dispatch=True, load_in_8bit=load_in_8bit, device_map=device, torch_dtype=torch.bfloat16)
     
@@ -677,11 +690,22 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     model_id = model_name.split('/')[-1].lower()
     
     # go into directory of this file
-    mean_vectors_dict = torch.load(f"../train-steering-vectors/results/vars/mean_vectors_{model_id}.pt")
+    mean_vectors_dict: dict[str, dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"] | int]] = None
+    try:
+        mean_vectors_dict = torch.load(f"train-steering-vectors/results/vars/mean_vectors_{model_id}.pt")
+    except FileNotFoundError as e:
+        if compute_features:
+            del model
+            if base_model:
+                del base_model
+            torch.cuda.empty_cache()
+            gc.collect()
+            raise e
+        warnings.warn(f"Expected error due to 1st time running, so the mean_vectors file of {model_id} does not exist yet. Proceeding without mean vectors.")
 
     if compute_features:
         # Compute feature vectors by subtracting overall mean
-        feature_vectors = {}
+        feature_vectors: dict[str, Float[torch.Tensor, "num_hidden_layers hidden_size"]] = {}
         feature_vectors["overall"] = mean_vectors_dict["overall"]['mean']
         
         for label in mean_vectors_dict:
@@ -693,6 +717,7 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
                 for label in feature_vectors:
                     feature_vectors[label] = feature_vectors[label] * (feature_vectors["overall"].norm(dim=-1, keepdim=True) / feature_vectors[label].norm(dim=-1, keepdim=True))
 
+    # TODO: refactor
     if base_model_name is not None and compute_features:
         return model, tokenizer, base_model, base_tokenizer, feature_vectors
     elif base_model_name is not None and not compute_features:
@@ -702,7 +727,15 @@ def load_model_and_vectors(device="cuda:0", load_in_8bit=False, compute_features
     else:
         return model, tokenizer, mean_vectors_dict
 
-def custom_generate_with_projection_removal(model, tokenizer, input_ids, max_new_tokens, label, feature_vectors, steering_config, steer_positive=False):
+def custom_generate_with_projection_removal(
+        model: LanguageModel, 
+        tokenizer: PreTrainedTokenizer, 
+        input_ids, 
+        max_new_tokens: int, 
+        label: str | None, 
+        feature_vectors: Float[torch.Tensor, "num_hidden_layers hidden_size"] | None, 
+        steering_config: dict[str, SteeringDict], 
+        steer_positive=False):
     """
     Generate text while removing or adding projections of specific features.
     
@@ -717,31 +750,37 @@ def custom_generate_with_projection_removal(model, tokenizer, input_ids, max_new
     """
     model_layers = model.model.layers
 
-    with model.generate(
-        input_ids,
-        max_new_tokens=max_new_tokens,
-        pad_token_id=tokenizer.eos_token_id,
-    ) as tracer:
-        # Apply .all() to model to ensure interventions work across all generations
-        model_layers.all()
+    with model.session(remote=True) as session:
+        with model.generate(
+            input_ids,
+            max_new_tokens=max_new_tokens,
+            pad_token_id=tokenizer.eos_token_id
+        ) as tracer:
+            # Apply .all() to model to ensure interventions work across all generations
+            model_layers.all()
 
-        if feature_vectors is not None:       
-            vector_layer = steering_config[label]["vector_layer"]
-            pos_layers = steering_config[label]["pos_layers"]
-            neg_layers = steering_config[label]["neg_layers"]
-            coefficient = steering_config[label]["pos_coefficient"] if steer_positive else steering_config[label]["neg_coefficient"]
-     
-
-            if steer_positive:
-                feature_vector = feature_vectors[label][vector_layer].to("cuda").to(torch.bfloat16)
-                for layer_idx in pos_layers:         
-                    model.model.layers[layer_idx].output[0][:, :] += coefficient * feature_vector.unsqueeze(0).unsqueeze(0)
-            else:
-                feature_vector = feature_vectors[label][vector_layer].to("cuda").to(torch.bfloat16)
-                for layer_idx in neg_layers:         
-                    model.model.layers[layer_idx].output[0][:, :] -= coefficient * feature_vector.unsqueeze(0).unsqueeze(0)
+            if feature_vectors is not None:       
+                vector_layer = steering_config[label]["vector_layer"]
+                pos_layers = steering_config[label]["pos_layers"]
+                neg_layers = steering_config[label]["neg_layers"]
+                coefficient = steering_config[label]["pos_coefficient"] if steer_positive else steering_config[label]["neg_coefficient"]
         
-        outputs = model.generator.output.save()
+
+                if steer_positive:
+                    feature_vector = feature_vectors[label][vector_layer]
+                    for layer_idx in pos_layers:         
+                        model.model.layers[layer_idx].output[0][:, :] += coefficient * feature_vector.unsqueeze(0).unsqueeze(0)
+                else:
+                    feature_vector = feature_vectors[label][vector_layer]
+                    for layer_idx in neg_layers:         
+                        # model.model.layers[layer_idx].output[0][:, :] -= coefficient * feature_vector.unsqueeze(0).unsqueeze(0)
+                        
+                        # ablate the feature vector
+                        model.model.layers[layer_idx].output[0][:, :] -= (
+                            ( feature_vector / feature_vector.norm(dim=-1, keepdim=True) ) 
+                            * model.model.layers[layer_idx].output[0][:, :]
+                        )
+            outputs = model.generator.output.save()
                     
     return outputs
 
@@ -835,7 +874,7 @@ def convert_numpy_types(obj):
 #  generating-additional-considerations
 #  logical-structure-testing
 
-steering_config = {
+steering_config: SteeringConfig = {
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "backtracking": {"vector_layer": 12, "pos_layers": [12], "neg_layers": [12], "pos_coefficient": 1, "neg_coefficient": 1},
         "uncertainty-estimation": {"vector_layer": 12, "pos_layers": [12], "neg_layers": [12], "pos_coefficient": 1, "neg_coefficient": 1},
