@@ -53,7 +53,7 @@ print("\n================\n")
 # %%
 for t in ["positive", "negative"]:
 
-    input_ids = tokenizer.apply_chat_template([eval_messages[data_idx]], add_generation_prompt=True, return_tensors="pt")
+    input_ids = tokenizer.apply_chat_template(eval_messages[data_idx], add_generation_prompt=True, return_tensors="pt")
     output_ids = utils.custom_generate_with_projection_removal(
         model,
         tokenizer,

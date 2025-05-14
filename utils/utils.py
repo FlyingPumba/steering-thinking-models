@@ -773,8 +773,13 @@ def custom_generate_with_projection_removal(
                 else:
                     feature_vector = feature_vectors[label][vector_layer]
                     for layer_idx in neg_layers:         
-                        model.model.layers[layer_idx].output[0][:, :] -= coefficient * feature_vector.unsqueeze(0).unsqueeze(0)
-            
+                        # model.model.layers[layer_idx].output[0][:, :] -= coefficient * feature_vector.unsqueeze(0).unsqueeze(0)
+                        
+                        # ablate the feature vector
+                        model.model.layers[layer_idx].output[0][:, :] -= (
+                            ( feature_vector / feature_vector.norm(dim=-1, keepdim=True) ) 
+                            * model.model.layers[layer_idx].output[0][:, :]
+                        )
             outputs = model.generator.output.save()
                     
     return outputs
