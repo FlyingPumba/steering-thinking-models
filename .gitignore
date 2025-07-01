@@ -19,3 +19,5 @@ unembed/
 /plots
 
 **/__pycache__/
+
+**/scratch.py
